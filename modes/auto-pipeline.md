@@ -29,6 +29,7 @@ Include Block G in the saved report. Add **URL:** {url} and **Legitimacy:** {tie
 
 Read `config/profile.yml`. Check `cv.output_format`:
 
+- If `"text"`, execute the full pipeline from `modes/text.md`
 - If `"latex"`, execute the full pipeline from `modes/latex.md`
 - Otherwise (default), execute the full pipeline from `modes/pdf.md`
 
