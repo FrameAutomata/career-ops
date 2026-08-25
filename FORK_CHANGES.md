@@ -2,33 +2,72 @@
 
 Customizations in this fork that diverge from upstream santifer/career-ops.
 
+## Branch layout — `main` and `dev/batch-local-llm` are the same commit
+
+`setup.ps1` / `setup.sh` in `job-search-pipeline` clone this fork with
+`--branch dev/batch-local-llm`, so that branch is what every install runs.
+`main` is the default branch, so it is what a plain `git clone` of this fork
+gets. **Both must carry everything**: `main` without `--cli` is a trap — the
+pipeline's `run.sh`/`run.ps1` always pass `--cli "$BATCH_CLI"`, and upstream's
+arg parser exits 1 on an unknown option, so `--batch` dies immediately.
+
+Keep the two refs at the same commit. Do not let `main` drift behind again, and
+do not repoint setup at `main` while existing checkouts track
+`dev/batch-local-llm` — they would silently stop receiving updates.
+
+## Fork-local files
+
+`config/local-paths.txt` (gitignored) declares `FORK_CHANGES.md` to upstream's
+`validate-system-paths-coverage.mjs`, which requires every tracked file to sit in
+`SYSTEM_PATHS` or `USER_PATHS`. See DATA_CONTRACT.md → "Fork-local paths"
+(upstream #2421). Declaring it there rather than in `update-system.mjs` is the
+point: `apply` overwrites that file and git re-merges it on every sync, so a
+declaration inside it would be erased by the process it exists to constrain.
+
 ## Tailored markdown resume mode (`cv.output_format: "text"`)
+
+**Pending upstream as [PR #3343](https://github.com/santifer/career-ops/pull/3343)
+(issue [#3342](https://github.com/santifer/career-ops/issues/3342))** — delete this
+section when it merges, do not re-apply it.
 
 Adds a third option alongside `html` and `latex` for generating a tailored resume.
 
-**Why:** the fork owner already has a preferred resume format and only needs the JD-tailoring step, not the HTML→PDF render.
+**Why:** both existing output paths assume career-ops should generate the document.
+The fork owner already has a preferred resume format and needs only the JD-tailoring
+step, not the HTML→PDF render. The markdown path also requires no toolchain
+(no Playwright, no tectonic/pdflatex) and has no CJK limitation.
 
-**What it does:** runs the same keyword extraction, summary rewrite, bullet reordering, and keyword-injection pipeline as `modes/pdf.md`, then writes the result as markdown that mirrors the structure of `cv.md`. No HTML, no Playwright, no PDF.
+**What it does:** runs the same keyword extraction, summary rewrite, bullet
+reordering and keyword-injection pipeline as `modes/pdf.md`, then writes the result
+as markdown mirroring the structure of `cv.md`.
 
 **How to use:**
 
 - One-shot: `/career-ops text` (with a JD in context)
-- Always-on: set `cv.output_format: "text"` in `config/profile.yml` — `auto-pipeline` (paste a JD with no sub-command) will route to text instead of PDF
+- Always-on: set `cv.output_format: "text"` in `config/profile.yml` — `auto-pipeline`
+  (paste a JD with no sub-command) will route to text instead of PDF
 
 **Output:** `output/cv-{candidate}-{company}-{YYYY-MM-DD}.md`
 
-**Tracker:** the existing `PDF` column in `data/applications.md` is reused — in this fork it means "resume artifact generated" (text or PDF both qualify).
+**Tracker:** the `PDF` column is deliberately **left alone**. It tracks a PDF indexed
+in `data/pdf-index.tsv`, which `find.mjs`, the dashboard and the `email` mode read to
+locate an attachment; marking it for a run that produced no PDF points them at a file
+that does not exist. (The pre-#3343 version of this mode marked it `✅` — that was
+wrong, and is why this note exists.)
+
+**Keep this branch's copy byte-identical to the PR branch** (`feat/cv-output-format-text`).
+Two divergent copies of one feature means the merge conflicts when #3343 lands
+instead of being a no-op — the same trap `--cli` fell into below.
 
 ### Files involved
 
 | File | Type | Status under upstream `update-system.mjs apply` |
 |------|------|-------------------------------------------------|
-| `modes/text.md` | new file | survives (not in SYSTEM_PATHS) |
-| `modes/auto-pipeline.md` Step 3 | edit | **overwritten** — re-apply this fork's branch after upstream updates |
-| `.agents/skills/career-ops/SKILL.md` | edit (argument-hint, routing table, discovery menu, context-loading list) | **overwritten** — re-apply after upstream updates |
-| `config/profile.example.yml` line 70 | edit (comment) | survives (not in SYSTEM_PATHS) |
-
-If you ever run `node update-system.mjs apply` and lose the `text` branch in auto-pipeline / SKILL.md, just re-apply this branch's commits on top — the rest of the wiring is intact.
+| `modes/text.md` | new file | in SYSTEM_PATHS as of #3343 — upstream will own it once merged |
+| `modes/auto-pipeline.md` Step 3 | edit | **overwritten** — re-apply after upstream updates |
+| `.agents/skills/career-ops/SKILL.md` | edit (argument-hint, routing table, discovery menu, context-loading list) | the 7 other CLI surfaces are symlinks to it, so one edit covers all |
+| `config/profile.example.yml` | edit (the option + a `cv.sections` note) | survives |
+| `modes/README.md`, `DATA_CONTRACT.md`, `update-system.mjs` | edit (mode registry, system-layer table, SYSTEM_PATHS) | **overwritten** — re-apply after upstream updates |
 
 ---
 

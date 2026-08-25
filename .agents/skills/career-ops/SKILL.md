@@ -137,7 +137,7 @@ Available commands:
   /career-ops interview/practice → Practice interview, one question at a time with feedback
   /career-ops interview/debrief → Post-interview debrief: close gaps, predict next round
   /career-ops pdf       → PDF only, ATS-optimized CV
-  /career-ops text      → Tailored markdown resume (mirrors cv.md structure, no PDF)
+  /career-ops text      → Tailored markdown CV (mirrors cv.md, no PDF)
   /career-ops latex     → Export CV as LaTeX/Overleaf .tex
   /career-ops latex-tex → Tailor your own resume.tex in place (opt-in; cv.md stays default)
   /career-ops cover     → Cover letter: standalone JD paste or /career-ops cover {slug}
