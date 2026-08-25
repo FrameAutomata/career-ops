@@ -34,7 +34,8 @@ If you ever run `node update-system.mjs apply` and lose the `text` branch in aut
 
 ## Multi-CLI batch runner (`batch/batch-runner.sh --cli`)
 
-Branch: `dev/batch-local-llm`.
+Branch: `dev/batch-local-llm`. **Pending upstream as [PR #738](https://github.com/santifer/career-ops/pull/738)** —
+this section should be deleted, not re-applied, once that merges.
 
 **Why:** upstream's runner is Claude Code-only — it dispatches `claude -p` with
 `--dangerously-skip-permissions` and `--append-system-prompt-file`, flags no other
@@ -44,18 +45,24 @@ dies on `Unknown option: --cli`.
 
 **What it does:** adds `--cli claude|opencode|gemini|qwen`. The `claude` arm is
 upstream's code path unchanged. The other three have no `--append-system-prompt-file`,
-so the resolved prompt file is inlined ahead of the user prompt as a single string,
-and `--model` is forwarded only when set explicitly — `spend_tier` resolves to Claude
-model names, which are meaningless to the other CLIs. `--parallel > 1` is reset to 1
-with a warning off the claude path. `opencode` falls back to
-`ollama launch opencode -y -- run` when the `opencode` binary is not in PATH.
+so the resolved prompt file is inlined ahead of the user prompt as a single string.
+`--parallel > 1`, `--strict-mcp-config` and the rate-limit/session retry loop are
+claude-only; the retry loop's detection only matches claude logs, so other CLIs
+fall through to a single attempt. `spend_tier` resolves to Claude model names, so
+non-claude CLIs take `--model` verbatim or their own default. `opencode` falls back
+to `ollama launch opencode -y -- run` when the `opencode` binary is not in PATH.
 
-**Superseded by upstream:** `--skip-pdf` and `--min-score` started here and upstream
-has since grown its own; this fork now carries upstream's.
+**Keep this branch's `batch-runner.sh` byte-identical to the PR branch**
+(`feat/batch-multi-cli`). Two divergent copies of the same feature in one fork means
+the merge conflicts when #738 lands, instead of being a no-op.
+
+**Superseded by upstream:** `--skip-pdf` and `--min-score` started here; `--min-score`'s
+cross-platform float fix went up as PR #735 (merged) and upstream has since grown its
+own `--skip-pdf`. This fork now carries upstream's.
 
 ### Files involved
 
 | File | Type | Status under upstream `update-system.mjs apply` |
 |------|------|-------------------------------------------------|
-| `batch/batch-runner.sh` | edit (header, usage, arg parse, preflight, model resolution, worker dispatch, run banner) | not in SYSTEM_PATHS, but upstream rewrites this file often — expect conflicts on merge and re-apply the `--cli` surface |
+| `batch/batch-runner.sh` | edit (header, usage, arg parse, preflight, model resolution, worker dispatch, run banner) | not in SYSTEM_PATHS, but upstream rewrites this file often — expect conflicts on merge, and resolve by taking `feat/batch-multi-cli`'s version rather than hand-merging |
 | `AGENTS.md` OpenCode row | edit (documents the ollama fallback) | **overwritten** — re-apply after upstream updates |

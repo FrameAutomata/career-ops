@@ -1,18 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# career-ops batch runner — CLI-agnostic orchestrator for headless agent workers
-# Reads batch-input.tsv, delegates each offer to a worker process,
-# tracks state in batch-state.tsv for resumability.
+# career-ops batch runner — standalone orchestrator for headless agent workers
+# Reads batch-input.tsv, delegates each offer to a worker, tracks state in
+# batch-state.tsv for resumability.
 #
-# FORK CHANGE (see FORK_CHANGES.md): upstream is Claude Code-only. This fork
-# adds --cli so the same runner drives other headless CLIs:
+# Supported CLIs (--cli flag):
 #   claude    — claude -p with --dangerously-skip-permissions (default)
 #   opencode  — opencode run (falls back to ollama launch opencode if not in PATH)
 #   gemini    — gemini -p
 #   qwen      — qwen -p
-# Only the claude path gets --append-system-prompt-file; the others receive the
-# resolved prompt file prepended to the user prompt as one string.
+#
+# Only claude supports --strict-mcp-config, the rate-limit/session retry loop,
+# and --parallel > 1; other CLIs run sequentially with a single attempt.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -42,10 +42,10 @@ START_FROM=0
 MAX_RETRIES=2
 MIN_SCORE=0
 SKIP_PDF=false
-CLI=claude
 MODEL=""  # explicit override; otherwise resolved from config/profile.yml spend_tier
 RESOLVED_MODEL=""
 RESOLVED_SPEND_TIER=""
+CLI=claude
 RATE_LIMIT_SLEEP=300
 BATCH_PAUSED=false
 STATUS_ONLY=false
@@ -60,12 +60,17 @@ is_decimal_number() {
 usage() {
   cat <<'USAGE'
 career-ops batch runner — process job offers in batch via headless agent workers
-Uses spend_tier from config/profile.yml unless --model overrides it.
+Defaults to claude; other CLIs via --cli. For claude the model is resolved from
+spend_tier in config/profile.yml unless --model overrides it.
 
 Usage: batch-runner.sh [OPTIONS]
 
 Options:
-  --cli NAME           Agent CLI to drive: claude (default), opencode, gemini, qwen
+  --cli NAME           Agent CLI to use: claude (default), opencode, gemini, qwen
+  --model NAME         Model for the CLI (e.g. qwen2.5:32b for opencode/ollama).
+                       For claude, overrides the tier-resolved model (otherwise
+                       config/profile.yml spend_tier: economy/standard/premium;
+                       default standard).
   --parallel N         Number of parallel workers (default: 1; claude only)
   --dry-run            Show what would be processed, don't execute
   --retry-failed       Only retry offers marked as "failed" in state
@@ -76,10 +81,7 @@ Options:
   --min-score N        Skip PDF/tracker for offers scoring below N (default: 0 = off)
   --skip-pdf           Skip PDF generation entirely (write ❌ in tracker PDF column)
   --rate-limit-sleep N Seconds to wait before retrying a rate-limited worker
-                       (default: 300)
-  --model NAME         Override the tier-resolved Claude model passed to
-                       `claude -p --model` (otherwise uses config/profile.yml
-                       spend_tier: economy/standard/premium; default standard)
+                       (default: 300; claude only)
   --status             Show batch progress and a per-job table, then exit
   --watch              Live-refresh progress until the run completes
   -h, --help           Show this help
@@ -104,7 +106,7 @@ Examples:
   # Process 2 at a time starting from ID 10 (claude only)
   ./batch-runner.sh --parallel 2 --start-from 10
 
-  # Local LLM via OpenCode + Ollama
+  # Local LLM via OpenCode (free, runs sequentially)
   ./batch-runner.sh --cli opencode --model qwen2.5:32b
 USAGE
 }
@@ -188,6 +190,8 @@ check_prerequisites() {
     exit 1
   fi
 
+  # Resolve the binary the configured CLI actually needs. opencode can run
+  # natively or fall back to ollama, so check for either.
   local cli_cmd
   case "$CLI" in
     claude)   cli_cmd="claude" ;;
@@ -205,9 +209,10 @@ check_prerequisites() {
     exit 1
   fi
 
-  # Parallelism is a claude-path feature; local models run sequentially.
+  # Parallelism, the rate-limit retry loop, and --strict-mcp-config are
+  # claude-only; local models run one at a time.
   if [[ "$CLI" != "claude" && "$PARALLEL" -gt 1 ]]; then
-    echo "WARN: --parallel >1 is not supported for --cli $CLI. Resetting to 1."
+    echo "WARN: --parallel >1 is not supported for --cli $CLI (local models run sequentially). Resetting to 1."
     PARALLEL=1
   fi
 
@@ -425,18 +430,19 @@ spend_tier_to_model() {
   esac
 }
 
-# Resolve the model to pass to `claude -p --model`. --model always wins.
+# Resolve the model to pass to the worker CLI. --model always wins.
+# spend_tier maps to Claude model names, so it only applies to --cli claude;
+# other CLIs use --model verbatim, or their own default when it is unset.
 resolve_worker_model() {
-  if [[ "$CLI" != "claude" ]]; then
-    # spend_tier resolves to Claude model names; other CLIs take --model or their own default.
-    RESOLVED_MODEL="$MODEL"
-    RESOLVED_SPEND_TIER="n/a"
-    return 0
-  fi
-
   if [[ -n "$MODEL" ]]; then
     RESOLVED_MODEL="$MODEL"
     RESOLVED_SPEND_TIER="override"
+    return 0
+  fi
+
+  if [[ "$CLI" != "claude" ]]; then
+    RESOLVED_MODEL=""
+    RESOLVED_SPEND_TIER="cli-default"
     return 0
   fi
 
@@ -943,9 +949,10 @@ process_offer() {
     fi
   done
 
-  # Launch claude -p worker.
-  # The model is resolved once per run from spend_tier unless --model was
-  # passed. Building the command in an array keeps quoting safe regardless.
+  # Build the launch command for the configured CLI.
+  # For claude the model is resolved once per run from spend_tier unless --model
+  # was passed; other CLIs take --model verbatim. Building claude's command in an
+  # array keeps quoting safe regardless.
   # --strict-mcp-config (with no --mcp-config) starts workers with no MCP
   # servers: they only evaluate offers and need none. Without it each parallel
   # worker inherits the parent session's MCP (e.g. Playwright) and they deadlock
@@ -956,15 +963,17 @@ process_offer() {
   fi
   claude_args+=(--append-system-prompt-file "$resolved_prompt" "$prompt")
 
-  # Non-claude CLIs have no --append-system-prompt-file: inline the resolved
-  # prompt ahead of the user prompt, and pass --model only when set explicitly.
-  local alt_prompt=""
-  local -a alt_model_args=()
+  # Non-claude CLIs lack --append-system-prompt-file, so concatenate the
+  # resolved system prompt and the per-job prompt into a single argument.
+  local full_prompt=""
+  local -a model_args=()
   if [[ "$CLI" != "claude" ]]; then
-    alt_prompt="$(cat "$resolved_prompt")"$'\n\n'"$prompt"
-    [[ -n "$RESOLVED_MODEL" ]] && alt_model_args=(--model "$RESOLVED_MODEL")
+    full_prompt="$(cat "$resolved_prompt")"$'\n\n'"$prompt"
+    [[ -n "$MODEL" ]] && model_args=(--model "$MODEL")
   fi
 
+  # The retry loop's rate-limit/session detection only matches claude logs, so
+  # non-claude CLIs naturally run a single attempt and fall through to break.
   local exit_code=0
   local terminal_failure_recorded=false
   local shim_retries=0
@@ -977,16 +986,16 @@ process_offer() {
         ;;
       opencode)
         if command -v opencode &>/dev/null; then
-          opencode run "${alt_model_args[@]}" "$alt_prompt" > "$log_file" 2>&1 || exit_code=$?
+          opencode run "${model_args[@]}" "$full_prompt" > "$log_file" 2>&1 || exit_code=$?
         else
-          ollama launch opencode "${alt_model_args[@]}" -y -- run "$alt_prompt" > "$log_file" 2>&1 || exit_code=$?
+          ollama launch opencode "${model_args[@]}" -y -- run "$full_prompt" > "$log_file" 2>&1 || exit_code=$?
         fi
         ;;
       gemini)
-        gemini -p "${alt_model_args[@]}" "$alt_prompt" > "$log_file" 2>&1 || exit_code=$?
+        gemini -p "$full_prompt" > "$log_file" 2>&1 || exit_code=$?
         ;;
       qwen)
-        qwen -p "${alt_model_args[@]}" "$alt_prompt" > "$log_file" 2>&1 || exit_code=$?
+        qwen -p "$full_prompt" > "$log_file" 2>&1 || exit_code=$?
         ;;
     esac
 
@@ -1363,12 +1372,12 @@ main() {
   else
     echo "Parallel: $PARALLEL | Max retries: $MAX_RETRIES"
   fi
-  if [[ "$CLI" != "claude" ]]; then
-    echo "CLI: $CLI | Model: ${RESOLVED_MODEL:-<CLI default>}"
-  elif [[ "$RESOLVED_SPEND_TIER" == "override" ]]; then
-    echo "Model: $RESOLVED_MODEL (explicit --model override)"
+  if [[ "$RESOLVED_SPEND_TIER" == "override" ]]; then
+    echo "CLI: $CLI | Model: $RESOLVED_MODEL (explicit --model override)"
+  elif [[ "$RESOLVED_SPEND_TIER" == "cli-default" ]]; then
+    echo "CLI: $CLI | Model: $CLI default"
   else
-    echo "Model: $RESOLVED_MODEL (spend_tier=${RESOLVED_SPEND_TIER})"
+    echo "CLI: $CLI | Model: $RESOLVED_MODEL (spend_tier=${RESOLVED_SPEND_TIER})"
   fi
   echo "Input: $total_input offers"
   echo ""
