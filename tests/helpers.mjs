@@ -243,15 +243,34 @@ export function utcDay(at = new Date()) {
 }
 
 /**
- * The UTC day(s) an operation bracketed by `before` and `after` could have
- * observed: one when it stayed inside a day, both when it crossed midnight.
+ * Every UTC day an operation bracketed by `before` and `after` could have
+ * observed, inclusive: one when it stayed inside a day, two when it crossed
+ * midnight, and each intervening day for anything longer.
+ *
+ * Returning only the two boundaries would be enough for a run() call left on
+ * its default timeout, but that timeout is caller-overridable, and a child
+ * spanning two midnights can report a day that sits between them. Filling the
+ * range keeps the result a property of the inputs rather than of a timeout
+ * somebody may change later.
+ *
+ * The bounds are ordered before use, so a clock stepped backwards mid-call
+ * (NTP correction on a CI runner) still yields the covering range instead of
+ * an empty one. Unparseable input yields [] rather than looping.
  *
  * @param {string} before - utcDay() read before the operation.
  * @param {string} after - utcDay() read after it.
- * @returns {string[]}
+ * @returns {string[]} Ascending, inclusive of both bounds.
  */
 export function daysSpanned(before, after) {
-  return before === after ? [before] : [before, after];
+  if (before === after) return [before];
+  // ISO-8601 dates sort lexicographically the same way they sort in time.
+  const [lo, hi] = before < after ? [before, after] : [after, before];
+  const end = Date.parse(`${hi}T00:00:00Z`);
+  const days = [];
+  for (let t = Date.parse(`${lo}T00:00:00Z`); t <= end; t += 86_400_000) {
+    days.push(utcDay(new Date(t)));
+  }
+  return days;
 }
 
 /**
@@ -267,8 +286,7 @@ export function daysSpanned(before, after) {
  * Bracketing the call removes the race without weakening the assertion: the
  * child ran somewhere inside [before, after], so its own day is one of the
  * returned days, and the caller still checks the date is current rather than
- * merely date-shaped. The run() timeout is far below 24h, so the window is at
- * most two days.
+ * merely date-shaped.
  *
  * @param {string} cmd - Executable, resolved through the run() allowlist.
  * @param {string[]} [args=[]]

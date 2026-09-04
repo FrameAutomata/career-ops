@@ -23,6 +23,25 @@ test('daysSpanned collapses to one day, and keeps both across a rollover', () =>
   assert.deepEqual(daysSpanned('2026-09-03', '2026-09-04'), ['2026-09-03', '2026-09-04']);
 });
 
+test('daysSpanned fills the range, so no intervening day is omitted', () => {
+  // run()'s timeout is caller-overridable, so a child can outlive two
+  // midnights and report a day that is neither bound.
+  assert.deepEqual(daysSpanned('2026-09-03', '2026-09-06'), [
+    '2026-09-03', '2026-09-04', '2026-09-05', '2026-09-06',
+  ]);
+  // month and year boundaries are the range's real edge cases
+  assert.deepEqual(daysSpanned('2026-02-28', '2026-03-01'), ['2026-02-28', '2026-03-01']);
+  assert.deepEqual(daysSpanned('2024-02-28', '2024-03-01'), ['2024-02-28', '2024-02-29', '2024-03-01']);
+  assert.deepEqual(daysSpanned('2026-12-31', '2027-01-01'), ['2026-12-31', '2027-01-01']);
+});
+
+test('daysSpanned survives a backwards clock step and refuses garbage', () => {
+  // NTP can step a CI runner backwards mid-call; the covering range is still
+  // the honest answer, and an ordered pair must not become an empty window.
+  assert.deepEqual(daysSpanned('2026-09-04', '2026-09-03'), ['2026-09-03', '2026-09-04']);
+  assert.deepEqual(daysSpanned('not-a-date', '2026-09-04'), []);
+});
+
 test('runAcrossUtcDay returns a window containing the day the child saw', () => {
   const { out, days } = runAcrossUtcDay(NODE, PRINT_OWN_DAY);
   assert.ok(days.length === 1 || days.length === 2, `window spans ${days.length} days`);
