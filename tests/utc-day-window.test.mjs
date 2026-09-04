@@ -40,6 +40,11 @@ test('daysSpanned survives a backwards clock step and refuses garbage', () => {
   // the honest answer, and an ordered pair must not become an empty window.
   assert.deepEqual(daysSpanned('2026-09-04', '2026-09-03'), ['2026-09-03', '2026-09-04']);
   assert.deepEqual(daysSpanned('not-a-date', '2026-09-04'), []);
+  // Equal bounds take their own branch, so garbage has to be rejected there
+  // too — otherwise the answer depends on which branch a bad input reaches.
+  assert.deepEqual(daysSpanned('not-a-date', 'not-a-date'), []);
+  // well-formed but not a real date: Date.parse rejects month 13
+  assert.deepEqual(daysSpanned('2026-13-01', '2026-13-01'), []);
 });
 
 test('runAcrossUtcDay returns a window containing the day the child saw', () => {

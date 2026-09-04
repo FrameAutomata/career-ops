@@ -255,19 +255,22 @@ export function utcDay(at = new Date()) {
  *
  * The bounds are ordered before use, so a clock stepped backwards mid-call
  * (NTP correction on a CI runner) still yields the covering range instead of
- * an empty one. Unparseable input yields [] rather than looping.
+ * an empty one. Either bound unparseable yields [] — including when both are
+ * the same unparseable string, so the answer never depends on which branch a
+ * bad input happens to take.
  *
  * @param {string} before - utcDay() read before the operation.
  * @param {string} after - utcDay() read after it.
- * @returns {string[]} Ascending, inclusive of both bounds.
+ * @returns {string[]} Ascending, inclusive of both bounds; [] if either is unparseable.
  */
 export function daysSpanned(before, after) {
-  if (before === after) return [before];
-  // ISO-8601 dates sort lexicographically the same way they sort in time.
-  const [lo, hi] = before < after ? [before, after] : [after, before];
-  const end = Date.parse(`${hi}T00:00:00Z`);
+  const start = Date.parse(`${before}T00:00:00Z`);
+  const end = Date.parse(`${after}T00:00:00Z`);
+  if (Number.isNaN(start) || Number.isNaN(end)) return [];
+  if (start === end) return [before];
+  const [lo, hi] = start < end ? [start, end] : [end, start];
   const days = [];
-  for (let t = Date.parse(`${lo}T00:00:00Z`); t <= end; t += 86_400_000) {
+  for (let t = lo; t <= hi; t += 86_400_000) {
     days.push(utcDay(new Date(t)));
   }
   return days;
