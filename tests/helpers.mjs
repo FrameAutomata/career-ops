@@ -232,6 +232,56 @@ export function lastRunFailure() {
 }
 
 /**
+ * Today as `YYYY-MM-DD` in UTC — the form the scripts under test emit from
+ * their own `today()`.
+ *
+ * @param {Date} [at=new Date()] - Instant to render; injectable for tests.
+ * @returns {string}
+ */
+export function utcDay(at = new Date()) {
+  return at.toISOString().split('T')[0];
+}
+
+/**
+ * The UTC day(s) an operation bracketed by `before` and `after` could have
+ * observed: one when it stayed inside a day, both when it crossed midnight.
+ *
+ * @param {string} before - utcDay() read before the operation.
+ * @param {string} after - utcDay() read after it.
+ * @returns {string[]}
+ */
+export function daysSpanned(before, after) {
+  return before === after ? [before] : [before, after];
+}
+
+/**
+ * run(), plus the UTC day(s) the child could have seen on its own clock.
+ *
+ * A test that captures the day once and compares it to a date the child
+ * computed for itself is reading the clock twice, and a UTC midnight between
+ * those two reads makes them disagree — turning an otherwise-green run red on
+ * whichever runner happens to straddle the boundary (#3816: macOS crossed
+ * midnight four seconds into test-all §12, while ubuntu and windows reached
+ * the same section after the rollover and passed).
+ *
+ * Bracketing the call removes the race without weakening the assertion: the
+ * child ran somewhere inside [before, after], so its own day is one of the
+ * returned days, and the caller still checks the date is current rather than
+ * merely date-shaped. The run() timeout is far below 24h, so the window is at
+ * most two days.
+ *
+ * @param {string} cmd - Executable, resolved through the run() allowlist.
+ * @param {string[]} [args=[]]
+ * @param {object} [opts={}] - Passed through to run().
+ * @returns {{out: string|null, days: string[]}}
+ */
+export function runAcrossUtcDay(cmd, args = [], opts = {}) {
+  const before = utcDay();
+  const out = run(cmd, args, opts);
+  return { out, days: daysSpanned(before, utcDay()) };
+}
+
+/**
  * The last failure rendered for interpolation into a failure message, or an
  * empty string when nothing has failed, so a caller can append it
  * unconditionally without changing its message on the success path.
